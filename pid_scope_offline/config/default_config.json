@@ -1,0 +1,8 @@
+{
+  "ui_refresh_hz": 30,
+  "realtime_window_sec": 10,
+  "buffer_window_sec": 60,
+  "max_points_per_curve": 2000,
+  "default_baud": 921600,
+  "step_threshold": 1.0
+}
