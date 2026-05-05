@@ -26,4 +26,5 @@ python app.py
 - `transport/`: 串口接收线程
 - `ui/`: 主窗口与交互
 - `config/`: 默认配置
-- `firmware_driver/`: 预留 C 驱动目录
+
+- `firmware_driver/`: 已实现 `pid_debug.h/.c`（非阻塞环形缓冲 + CRC + PARAM_SET 解析）与示例
