@@ -48,9 +48,18 @@ class MainWindow(QMainWindow):
 
         mid = QHBoxLayout()
         self.device_list = QListWidget(); self.device_list.addItem("1:0")
+        chart_layout = QVBoxLayout()
         self.plot = pg.PlotWidget(background="#101418")
         self.plot.addLegend()
         self.curves = {k: self.plot.plot(pen=c, name=k) for k, c in [("target", "y"), ("feedback", "c"), ("error", "m"), ("output", "w")]}
+        self.extra_plot = pg.PlotWidget(background="#101418")
+        self.extra_plot.addLegend()
+        self.extra_curves = {
+            "extra1": self.extra_plot.plot(pen="g", name="extra1"),
+            "extra2": self.extra_plot.plot(pen="r", name="extra2")
+        }
+        chart_layout.addWidget(self.plot, 3)
+        chart_layout.addWidget(self.extra_plot, 2)
 
         panel = QGroupBox("PID Params")
         form = QFormLayout(panel)
@@ -61,7 +70,9 @@ class MainWindow(QMainWindow):
         form.addRow("Kp", self.kp); form.addRow("Ki", self.ki); form.addRow("Kd", self.kd); form.addRow(self.apply_btn)
 
         mid.addWidget(self.device_list, 1)
-        mid.addWidget(self.plot, 4)
+        chart_wrap = QWidget()
+        chart_wrap.setLayout(chart_layout)
+        mid.addWidget(chart_wrap, 4)
         mid.addWidget(panel, 1)
         layout.addLayout(mid)
 
@@ -109,5 +120,7 @@ class MainWindow(QMainWindow):
         x = [(w["timestamp_ms"] - t0) / 1000.0 for w in window]
         for k in ["target", "feedback", "error", "output"]:
             self.curves[k].setData(x, [w[k] for w in window])
+        self.extra_curves["extra1"].setData(x, [w["extra1"] for w in window])
+        self.extra_curves["extra2"].setData(x, [w["extra2"] for w in window])
         result = basic_step_analysis(window)
         self.analysis.setText("\n".join(f"{k}: {v}" for k, v in result.items()))

@@ -10,6 +10,9 @@ extern "C" {
 #define PID_DEBUG_VERSION 0x01u
 #define PID_DEBUG_SOF_1   0xA5u
 #define PID_DEBUG_SOF_2   0x5Au
+#ifndef PID_DEBUG_ENABLE_TELEMETRY
+#define PID_DEBUG_ENABLE_TELEMETRY 1u
+#endif
 
 typedef enum {
     PID_FRAME_TELEMETRY    = 0x01,
@@ -67,12 +70,28 @@ typedef struct {
     pid_debug_param_set_cb on_param_set;
 } pid_debug_port_t;
 
+typedef struct {
+    pid_debug_param_t param;
+    float integral;
+    float prev_error;
+    float prev_feedback;
+    float prev_d_term;
+    float prev_output;
+    uint32_t prev_ts_ms;
+    uint8_t initialized;
+} pid_controller_t;
+
 void pid_debug_init(const pid_debug_port_t *port);
 int pid_debug_send_telemetry(uint8_t device_id, uint8_t channel_id, const pid_debug_telemetry_t *tel);
 int pid_debug_send_param_report(uint8_t device_id, uint8_t channel_id, const pid_debug_param_t *param);
 int pid_debug_send_event(uint8_t device_id, uint8_t channel_id, uint16_t event_code, float value);
 void pid_debug_rx_byte(uint8_t byte);
 void pid_debug_poll(void);
+
+void pid_controller_init(pid_controller_t *ctrl, const pid_debug_param_t *param);
+void pid_controller_set_param(pid_controller_t *ctrl, const pid_debug_param_t *param);
+void pid_controller_reset(pid_controller_t *ctrl);
+float pid_controller_update(pid_controller_t *ctrl, float target, float feedback, uint32_t now_ms);
 
 #ifdef __cplusplus
 }
