@@ -62,6 +62,10 @@ static void rb_drop(uint16_t len) {
 }
 
 static int send_frame(uint8_t type, uint8_t device_id, uint8_t channel_id, const uint8_t *payload, uint16_t plen) {
+#if PID_DEBUG_ENABLE_TELEMETRY == 0u
+    (void)type; (void)device_id; (void)channel_id; (void)payload; (void)plen;
+    return 0;
+#else
     uint8_t frame[PID_FRAME_OVERHEAD + PID_RX_MAX_PAYLOAD];
     uint16_t total = (uint16_t)(8u + plen + 2u);
     if (plen > PID_RX_MAX_PAYLOAD) return -2;
@@ -78,6 +82,7 @@ static int send_frame(uint8_t type, uint8_t device_id, uint8_t channel_id, const
     frame[8u + plen] = (uint8_t)(crc & 0xFFu);
     frame[9u + plen] = (uint8_t)(crc >> 8u);
     return rb_push(frame, total);
+#endif
 }
 
 void pid_debug_init(const pid_debug_port_t *port) {
@@ -105,12 +110,16 @@ int pid_debug_send_event(uint8_t device_id, uint8_t channel_id, uint16_t event_c
 }
 
 void pid_debug_poll(void) {
+#if PID_DEBUG_ENABLE_TELEMETRY == 0u
+    return;
+#else
     if (g_port.write == 0) return;
     uint8_t *ptr;
     uint16_t n = rb_peek_linear(&ptr);
     if (n == 0) return;
     int sent = g_port.write(ptr, n);
     if (sent > 0) rb_drop((uint16_t)sent);
+#endif
 }
 
 void pid_debug_rx_byte(uint8_t byte) {
@@ -156,4 +165,83 @@ void pid_debug_rx_byte(uint8_t byte) {
         } break;
         default: state = S_SOF1; break;
     }
+}
+
+static float clampf(float x, float lo, float hi) {
+    return (x < lo) ? lo : ((x > hi) ? hi : x);
+}
+
+void pid_controller_reset(pid_controller_t *ctrl) {
+    if (ctrl == 0) return;
+    ctrl->integral = 0.0f;
+    ctrl->prev_error = 0.0f;
+    ctrl->prev_feedback = 0.0f;
+    ctrl->prev_d_term = 0.0f;
+    ctrl->prev_output = 0.0f;
+    ctrl->prev_ts_ms = 0u;
+    ctrl->initialized = 0u;
+}
+
+void pid_controller_set_param(pid_controller_t *ctrl, const pid_debug_param_t *param) {
+    if (ctrl == 0 || param == 0) return;
+    ctrl->param = *param;
+}
+
+void pid_controller_init(pid_controller_t *ctrl, const pid_debug_param_t *param) {
+    if (ctrl == 0) return;
+    memset(ctrl, 0, sizeof(*ctrl));
+    if (param != 0) ctrl->param = *param;
+}
+
+float pid_controller_update(pid_controller_t *ctrl, float target, float feedback, uint32_t now_ms) {
+    if (ctrl == 0) return 0.0f;
+    float dt = 0.001f;
+    if (ctrl->initialized) {
+        uint32_t dms = now_ms - ctrl->prev_ts_ms;
+        if (dms > 0u) dt = (float)dms * 0.001f;
+        if (dt > 0.5f) dt = 0.5f;
+    } else {
+        ctrl->initialized = 1u;
+    }
+    ctrl->prev_ts_ms = now_ms;
+
+    float limited_target = target;
+    if (ctrl->param.max_target_step > 0.0f) {
+        limited_target = clampf(target, feedback - ctrl->param.max_target_step, feedback + ctrl->param.max_target_step);
+    }
+    float error = limited_target - feedback;
+    if (error > -ctrl->param.deadband && error < ctrl->param.deadband) error = 0.0f;
+
+    float p_term = ctrl->param.kp * error;
+    if (ctrl->param.enable_integral) {
+        ctrl->integral += error * dt;
+        ctrl->integral = clampf(ctrl->integral, ctrl->param.integral_min, ctrl->param.integral_max);
+    } else {
+        ctrl->integral = 0.0f;
+    }
+    float i_term = ctrl->param.ki * ctrl->integral;
+
+    float derivative = 0.0f;
+    if (ctrl->param.enable_derivative && dt > 1e-6f) derivative = (ctrl->prev_feedback - feedback) / dt;
+    float d_term = ctrl->param.kd * derivative;
+    float alpha = clampf(ctrl->param.d_filter_alpha, 0.0f, 1.0f);
+    d_term = alpha * ctrl->prev_d_term + (1.0f - alpha) * d_term;
+    ctrl->prev_d_term = d_term;
+
+    float ff = ctrl->param.enable_feedforward ? (ctrl->param.feedforward_gain * limited_target) : 0.0f;
+    float output = p_term + i_term + d_term + ff;
+    output = clampf(output, ctrl->param.output_min, ctrl->param.output_max);
+    if (ctrl->param.max_output_slew_rate > 0.0f) {
+        float max_step = ctrl->param.max_output_slew_rate * dt;
+        output = clampf(output, ctrl->prev_output - max_step, ctrl->prev_output + max_step);
+    }
+
+    if (ctrl->param.enable_anti_windup && ctrl->param.ki != 0.0f &&
+        (output <= ctrl->param.output_min || output >= ctrl->param.output_max)) {
+        ctrl->integral -= error * dt;
+    }
+    ctrl->prev_error = error;
+    ctrl->prev_feedback = feedback;
+    ctrl->prev_output = output;
+    return output;
 }
