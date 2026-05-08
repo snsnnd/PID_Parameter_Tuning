@@ -21,8 +21,9 @@ def smoothstep(t: float) -> float:
 
 
 class WhatIfSimulatorWindow(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, on_apply=None, parent=None):
         super().__init__(parent)
+        self.on_apply = on_apply
         self.setWindowTitle("Interactive What-If Simulator")
         self.resize(900, 520)
         self.hist_y = deque(maxlen=600)
@@ -32,6 +33,8 @@ class WhatIfSimulatorWindow(QWidget):
         root = QHBoxLayout(self)
         left = QGroupBox("参数拖动")
         grid = QGridLayout(left)
+        self.ctrl_mode = QComboBox()
+        self.ctrl_mode.addItems(["LADRC", "PID"])
 
         self.wc_slider = QSlider(Qt.Horizontal)
         self.wc_slider.setRange(10, 1200)
@@ -46,11 +49,17 @@ class WhatIfSimulatorWindow(QWidget):
         self.noise_slider.setRange(0, 200)
         self.noise_slider.setValue(20)
 
+        self.wc_lbl = QLabel("wc")
+        self.wo_lbl = QLabel("wo")
+        self.b0_lbl = QLabel("b0")
         self.wc_val = QLabel(); self.wo_val = QLabel(); self.b0_val = QLabel(); self.noise_val = QLabel()
-        grid.addWidget(QLabel("wc"), 0, 0); grid.addWidget(self.wc_slider, 0, 1); grid.addWidget(self.wc_val, 0, 2)
-        grid.addWidget(QLabel("wo"), 1, 0); grid.addWidget(self.wo_slider, 1, 1); grid.addWidget(self.wo_val, 1, 2)
-        grid.addWidget(QLabel("b0"), 2, 0); grid.addWidget(self.b0_slider, 2, 1); grid.addWidget(self.b0_val, 2, 2)
-        grid.addWidget(QLabel("白噪声"), 3, 0); grid.addWidget(self.noise_slider, 3, 1); grid.addWidget(self.noise_val, 3, 2)
+        self.apply_btn = QPushButton("应用到高级页")
+        grid.addWidget(QLabel("控制算法"), 0, 0); grid.addWidget(self.ctrl_mode, 0, 1, 1, 2)
+        grid.addWidget(self.wc_lbl, 1, 0); grid.addWidget(self.wc_slider, 1, 1); grid.addWidget(self.wc_val, 1, 2)
+        grid.addWidget(self.wo_lbl, 2, 0); grid.addWidget(self.wo_slider, 2, 1); grid.addWidget(self.wo_val, 2, 2)
+        grid.addWidget(self.b0_lbl, 3, 0); grid.addWidget(self.b0_slider, 3, 1); grid.addWidget(self.b0_val, 3, 2)
+        grid.addWidget(QLabel("白噪声"), 4, 0); grid.addWidget(self.noise_slider, 4, 1); grid.addWidget(self.noise_val, 4, 2)
+        grid.addWidget(self.apply_btn, 5, 0, 1, 3)
 
         self.plot = pg.PlotWidget(background="#101418")
         self.plot.showGrid(x=True, y=True, alpha=0.3)
@@ -60,9 +69,31 @@ class WhatIfSimulatorWindow(QWidget):
         root.addWidget(left, 1)
         root.addWidget(self.plot, 2)
 
+        self.ctrl_mode.currentTextChanged.connect(self._update_mode_labels)
+        self.apply_btn.clicked.connect(self._emit_apply)
         for slider in [self.wc_slider, self.wo_slider, self.b0_slider, self.noise_slider]:
             slider.valueChanged.connect(self._update_plot)
+        self._update_mode_labels()
         self._update_plot()
+
+    def _update_mode_labels(self):
+        if self.ctrl_mode.currentText() == "PID":
+            self.wc_lbl.setText("Kp")
+            self.wo_lbl.setText("Ki")
+            self.b0_lbl.setText("Kd")
+        else:
+            self.wc_lbl.setText("wc")
+            self.wo_lbl.setText("wo")
+            self.b0_lbl.setText("b0")
+
+    def _emit_apply(self):
+        if self.on_apply:
+            self.on_apply(
+                self.ctrl_mode.currentText(),
+                self.wc_slider.value() / 10.0,
+                self.wo_slider.value() / 10.0,
+                self.b0_slider.value() / 100.0
+            )
 
     def _update_plot(self):
         wc = self.wc_slider.value() / 10.0
@@ -74,16 +105,30 @@ class WhatIfSimulatorWindow(QWidget):
         self.b0_val.setText(f"{b0:.2f}")
         self.noise_val.setText(f"{noise_amp:.2f}")
 
-        st = LADRCState()
-        cfg = LADRCConfig(b0=max(0.05, b0), wc=max(0.1, wc), wo=max(0.1, wo), u_min=-1e4, u_max=1e4)
         y = 0.0
         ys = []
-        for k in range(260):
-            r = 100.0 if k > 12 else 0.0
-            meas = y + np.random.normal(0.0, noise_amp)
-            u, st = ladrc_step(r, meas, 0.01, cfg, st)
-            y += 0.01 * (-1.6 * y + 0.08 * u)
-            ys.append(y)
+        if self.ctrl_mode.currentText() == "PID":
+            i_term = 0.0
+            prev_e = 0.0
+            for k in range(260):
+                r = 100.0 if k > 12 else 0.0
+                meas = y + np.random.normal(0.0, noise_amp)
+                e = r - meas
+                i_term += e * 0.01
+                d_term = (e - prev_e) / 0.01
+                prev_e = e
+                u = wc * e + wo * i_term + b0 * d_term
+                y += 0.01 * (-1.6 * y + 0.08 * u)
+                ys.append(y)
+        else:
+            st = LADRCState()
+            cfg = LADRCConfig(b0=max(0.05, b0), wc=max(0.1, wc), wo=max(0.1, wo), u_min=-1e4, u_max=1e4)
+            for k in range(260):
+                r = 100.0 if k > 12 else 0.0
+                meas = y + np.random.normal(0.0, noise_amp)
+                u, st = ladrc_step(r, meas, 0.01, cfg, st)
+                y += 0.01 * (-1.6 * y + 0.08 * u)
+                ys.append(y)
 
         self.cur_step.setData(list(range(len(ys))), ys)
 
@@ -150,7 +195,10 @@ class AdvancedTuningWindow(QWidget):
 
         right = QWidget(); rly = QVBoxLayout(right)
         self.log = QTextEdit(); self.log.setReadOnly(True)
+        self.alg_info = QLabel("高级算法：PID增益调度、防抖分段切换、线性/平滑插值、LADRC(ESO+补偿)、交互式仿真、调参象限图")
+        self.alg_info.setWordWrap(True)
         rly.addWidget(cfg); rly.addWidget(QLabel("运行日志")); rly.addWidget(self.log)
+        rly.addWidget(self.alg_info)
 
         split.addWidget(left); split.addWidget(right); split.setSizes([800, 360])
         root.addWidget(ctrl); root.addWidget(split)
@@ -244,8 +292,17 @@ class AdvancedTuningWindow(QWidget):
         self.update_from_telemetry({"timestamp_ms": int(self.sim_t * 1000), "target": target, "feedback": feedback, "extra1": voltage}, 99, 0)
 
     def _open_whatif_sim(self):
-        self._whatif_win = WhatIfSimulatorWindow(self)
+        self._whatif_win = WhatIfSimulatorWindow(on_apply=self._apply_whatif_to_panel, parent=self)
         self._whatif_win.show()
+
+    def _apply_whatif_to_panel(self, ctrl_mode: str, p1: float, p2: float, p3: float):
+        if ctrl_mode == "LADRC":
+            self.wc.setValue(p1)
+            self.wo.setValue(p2)
+            self.b0.setValue(p3)
+            self.log.append(f"[ok] 已应用 LADRC 参数 wc={p1:.2f}, wo={p2:.2f}, b0={p3:.2f}")
+        else:
+            self.log.append(f"[hint] PID 模拟参数 Kp={p1:.2f}, Ki={p2:.2f}, Kd={p3:.2f}；可用于调整电压分段 PID 增益。")
 
     def _run_tuning_map(self):
         if self.sim_mode:
