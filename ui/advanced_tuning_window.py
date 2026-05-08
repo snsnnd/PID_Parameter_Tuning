@@ -157,17 +157,23 @@ class AdvancedTuningWindow(QWidget):
 
         self._build_ui()
         self._bind_events()
+        self._on_lab_mode_changed()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         ctrl = QGroupBox("控制面板")
         cly = QHBoxLayout(ctrl)
         self.apply_btn = QPushButton("一键写参")
+        self.apply_pid_candidates_btn = QPushButton("PID一键回写分段候选")
         self.sim_btn = QPushButton("启动模拟")
         self.heatmap_btn = QPushButton("调参象限图")
         self.whatif_btn = QPushButton("交互式模拟器")
         self.clear_btn = QPushButton("清空曲线")
-        for b in [self.apply_btn, self.sim_btn, self.heatmap_btn, self.whatif_btn, self.clear_btn]:
+        self.lab_mode = QComboBox()
+        self.lab_mode.addItems(["PID 调参", "LADRC 调参"])
+        cly.addWidget(QLabel("高级页模式"))
+        cly.addWidget(self.lab_mode)
+        for b in [self.apply_btn, self.apply_pid_candidates_btn, self.sim_btn, self.heatmap_btn, self.whatif_btn, self.clear_btn]:
             cly.addWidget(b)
         cly.addStretch(1)
 
@@ -180,6 +186,7 @@ class AdvancedTuningWindow(QWidget):
         self.wo = QDoubleSpinBox(); self.wo.setRange(0.1, 2000); self.wo.setValue(60.0)
         fly.addRow("分段防抖(ms)", self.debounce); fly.addRow("插值模式", self.interp_mode)
         fly.addRow("LADRC b0", self.b0); fly.addRow("LADRC wc", self.wc); fly.addRow("LADRC wo", self.wo)
+        self.ladrc_rows = [("LADRC b0", self.b0), ("LADRC wc", self.wc), ("LADRC wo", self.wo)]
 
         split = QSplitter()
         left = QWidget(); lly = QVBoxLayout(left)
@@ -207,10 +214,23 @@ class AdvancedTuningWindow(QWidget):
 
     def _bind_events(self):
         self.apply_btn.clicked.connect(self._apply_current)
+        self.apply_pid_candidates_btn.clicked.connect(self._apply_pid_candidates)
         self.sim_btn.clicked.connect(self._toggle_simulation)
         self.heatmap_btn.clicked.connect(self._run_tuning_map)
         self.whatif_btn.clicked.connect(self._open_whatif_sim)
         self.clear_btn.clicked.connect(self._clear_curves)
+        self.lab_mode.currentTextChanged.connect(self._on_lab_mode_changed)
+
+    def _on_lab_mode_changed(self):
+        is_ladrc = self.lab_mode.currentText() == "LADRC 调参"
+        self.b0.setVisible(is_ladrc)
+        self.wc.setVisible(is_ladrc)
+        self.wo.setVisible(is_ladrc)
+        self.heatmap_btn.setVisible(is_ladrc)
+        self.cur_z2.setVisible(is_ladrc)
+        self.cur_u0.setVisible(is_ladrc)
+        self.cur_uc.setVisible(is_ladrc)
+        self.apply_pid_candidates_btn.setVisible(not is_ladrc)
 
     def _mode_guard(self):
         self.heatmap_btn.setEnabled(not self.sim_mode)
@@ -247,7 +267,12 @@ class AdvancedTuningWindow(QWidget):
         band, gains = self.last_pick
         cfg = LADRCConfig(b0=self.b0.value(), wc=self.wc.value(), wo=self.wo.value(), u_min=-1e4, u_max=1e4)
         target = float(tel.get('target', 0.0)); feedback = float(tel.get('feedback', 0.0))
-        u, self.ladrc_state = ladrc_step(target, feedback, 0.01, cfg, self.ladrc_state)
+        use_ladrc = self.lab_mode.currentText() == "LADRC 调参"
+        if use_ladrc:
+            u, self.ladrc_state = ladrc_step(target, feedback, 0.01, cfg, self.ladrc_state)
+        else:
+            e = target - feedback
+            u = gains.kp * e
         e = target - feedback
         u0 = cfg.wc * cfg.wc * e - 2.0 * cfg.wc * self.ladrc_state.z2
         u_comp = -self.ladrc_state.z2 / max(cfg.b0, 1e-6)
@@ -274,6 +299,23 @@ class AdvancedTuningWindow(QWidget):
         frame = encode_frame(FRAME_PARAM_SET, getattr(self, '_last_device', 1), getattr(self, '_last_channel', 0), payload)
         self.send_frame_requested.emit(frame)
         self.log.append("[ok] PARAM_SET 已发送")
+
+    def _apply_pid_candidates(self):
+        if not hasattr(self, "_last_device"):
+            self.log.append("[warn] 请先接收一次遥测，再执行 PID 回写")
+            return
+        base_kp = max(0.01, self.wc.value() / 20.0)
+        base_ki = max(0.0, self.wo.value() / 600.0)
+        base_kd = max(0.0, self.b0.value() / 100.0)
+        plan = [("high_voltage", 0.92), ("mid_voltage", 1.00), ("low_voltage", 1.12)]
+        for idx, (_, ratio) in enumerate(plan):
+            kp = base_kp * ratio
+            ki = base_ki * ratio
+            kd = base_kd * ratio
+            payload = encode_param_set_payload(kp=kp, ki=ki, kd=kd)
+            frame = encode_frame(FRAME_PARAM_SET, getattr(self, '_last_device', 1), idx, payload)
+            self.send_frame_requested.emit(frame)
+            self.log.append(f"[ok] PID候选已下发 ch={idx} kp={kp:.3f} ki={ki:.3f} kd={kd:.3f}")
 
     def _toggle_simulation(self):
         self.sim_mode = not self.sim_mode
