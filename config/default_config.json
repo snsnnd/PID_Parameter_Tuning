@@ -1,0 +1,43 @@
+{
+  "ui_refresh_hz": 30,
+  "realtime_window_sec": 10,
+  "buffer_window_sec": 60,
+  "max_points_per_curve": 2000,
+  "default_baud": 921600,
+  "step_threshold": 1.0,
+  "gain_schedule": {
+    "voltage_source": "extra1",
+    "voltage_bands": [
+      {
+        "name": "high_voltage",
+        "min_v": 23.0,
+        "max_v": 26.0,
+        "gains": {
+          "kp": 1.0,
+          "ki": 0.08,
+          "kd": 0.01
+        }
+      },
+      {
+        "name": "mid_voltage",
+        "min_v": 21.0,
+        "max_v": 23.0,
+        "gains": {
+          "kp": 1.15,
+          "ki": 0.1,
+          "kd": 0.012
+        }
+      },
+      {
+        "name": "low_voltage",
+        "min_v": 18.0,
+        "max_v": 21.0,
+        "gains": {
+          "kp": 1.3,
+          "ki": 0.12,
+          "kd": 0.015
+        }
+      }
+    ]
+  }
+}
