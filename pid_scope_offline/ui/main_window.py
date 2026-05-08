@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -10,6 +13,8 @@ from core.parser import FrameParser
 from core.protocol import FRAME_TELEMETRY, decode_telemetry
 from core.device_manager import DeviceManager
 from core.analyzer import basic_step_analysis
+from core.gain_schedule import build_bands, pick_gain_by_voltage
+from ui.advanced_tuning_window import AdvancedTuningWindow
 
 
 class MainWindow(QMainWindow):
@@ -20,8 +25,12 @@ class MainWindow(QMainWindow):
         self.parser = FrameParser()
         self.dm = DeviceManager()
         self.current_channel = (1, 0)
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "default_config.json"
+        self.config = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.schedule_bands = build_bands(self.config.get("gain_schedule", {}))
 
         self.worker = SerialWorker()
+        self.advanced_win = AdvancedTuningWindow(self.config, self._send_frame, self)
         self.thread = QThread(self)
         self.worker.moveToThread(self.thread)
 
@@ -37,14 +46,37 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
-        top = QHBoxLayout()
+        top_group = QVBoxLayout()
+
+        conn_row = QHBoxLayout()
         self.port = QComboBox(); self.port.addItems(["COM3", "/dev/ttyUSB0", "/dev/ttyACM0"])
+        self.port.setMinimumWidth(180)
         self.baud = QComboBox(); self.baud.addItems(["115200", "460800", "921600", "2000000", "3000000"])
+        self.baud.setMinimumWidth(140)
         self.btn = QPushButton("Connect")
+        self.btn.setMinimumWidth(110)
         self.status = QLabel("Idle")
-        for w in [QLabel("Port"), self.port, QLabel("Baud"), self.baud, self.btn, self.status]: top.addWidget(w)
-        top.addStretch(1)
-        layout.addLayout(top)
+        self.status.setMinimumWidth(320)
+        conn_row.addWidget(QLabel("Serial Port"))
+        conn_row.addWidget(self.port)
+        conn_row.addWidget(QLabel("Baud"))
+        conn_row.addWidget(self.baud)
+        conn_row.addWidget(self.btn)
+        conn_row.addStretch(1)
+        conn_row.addWidget(QLabel("Status:"))
+        conn_row.addWidget(self.status)
+
+        tool_row = QHBoxLayout()
+        self.advanced_btn = QPushButton("Advanced Tuning Lab")
+        self.advanced_btn.setMinimumWidth(220)
+        self.refresh_hint = QLabel("提示：高级功能与模拟均在 Advanced Tuning Lab 中，基础页保持最小化")
+        tool_row.addWidget(self.advanced_btn)
+        tool_row.addWidget(self.refresh_hint)
+        tool_row.addStretch(1)
+
+        top_group.addLayout(conn_row)
+        top_group.addLayout(tool_row)
+        layout.addLayout(top_group)
 
         mid = QHBoxLayout()
         self.device_list = QListWidget(); self.device_list.addItem("1:0")
@@ -74,6 +106,7 @@ class MainWindow(QMainWindow):
         self.worker.status.connect(self.status.setText)
         self.btn.clicked.connect(self.toggle_connect)
         self.device_list.currentTextChanged.connect(self.on_select)
+        self.advanced_btn.clicked.connect(self.advanced_win.show)
 
     def toggle_connect(self):
         if self.thread.isRunning():
@@ -97,6 +130,7 @@ class MainWindow(QMainWindow):
                 tag = f"{frame.device_id}:{frame.channel_id}"
                 if not self.device_list.findItems(tag, Qt.MatchExactly):
                     self.device_list.addItem(tag)
+                self.advanced_win.update_from_telemetry(tel, frame.device_id, frame.channel_id)
             except Exception:
                 pass
 
@@ -110,4 +144,21 @@ class MainWindow(QMainWindow):
         for k in ["target", "feedback", "error", "output"]:
             self.curves[k].setData(x, [w[k] for w in window])
         result = basic_step_analysis(window)
-        self.analysis.setText("\n".join(f"{k}: {v}" for k, v in result.items()))
+        lines = [f"{k}: {v}" for k, v in result.items()]
+        if self.schedule_bands:
+            batt_v = float(window[-1].get("extra1", 0.0))
+            pick = pick_gain_by_voltage(batt_v, self.schedule_bands)
+            if pick:
+                band, gains = pick
+                lines.extend([
+                    f"battery_voltage(extra1): {batt_v:.3f}V",
+                    f"scheduled_band: {band}",
+                    f"suggested_kp: {gains.kp}",
+                    f"suggested_ki: {gains.ki}",
+                    f"suggested_kd: {gains.kd}",
+                ])
+        self.analysis.setText("\n".join(lines))
+
+
+    def _send_frame(self, data: bytes):
+        self.worker.send_bytes(data)

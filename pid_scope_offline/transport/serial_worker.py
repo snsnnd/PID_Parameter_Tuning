@@ -31,3 +31,12 @@ class SerialWorker(QObject):
     @Slot()
     def stop(self) -> None:
         self.running = False
+
+
+    @Slot(bytes)
+    def send_bytes(self, data: bytes) -> None:
+        try:
+            if self.ser and self.ser.is_open:
+                self.ser.write(data)
+        except Exception as exc:
+            self.status.emit(f"Serial write error: {exc}")
