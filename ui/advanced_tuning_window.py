@@ -334,7 +334,7 @@ class AdvancedTuningWindow(QWidget):
         self.update_from_telemetry({"timestamp_ms": int(self.sim_t * 1000), "target": target, "feedback": feedback, "extra1": voltage}, 99, 0)
 
     def _open_whatif_sim(self):
-        self._whatif_win = WhatIfSimulatorWindow(on_apply=self._apply_whatif_to_panel, parent=self)
+        self._whatif_win = WhatIfSimulatorWindow(on_apply=self._apply_whatif_to_panel)
         self._whatif_win.show()
 
     def _apply_whatif_to_panel(self, ctrl_mode: str, p1: float, p2: float, p3: float):
