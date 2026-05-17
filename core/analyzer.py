@@ -14,7 +14,11 @@ def basic_step_analysis(samples: list[dict]) -> dict:
         overshoot = max(0.0, (feedback.max() - target[-1]) / abs(target[-1]) * 100)
     steady_state_error = float(abs(error[-1]))
     zc = int(np.sum(np.diff(np.sign(error)) != 0))
-    iae = float(np.trapz(np.abs(error), t))
+    abs_error = np.abs(error)
+    if hasattr(np, "trapezoid"):
+        iae = float(np.trapezoid(abs_error, t))
+    else:
+        iae = float(sum((abs_error[i] + abs_error[i - 1]) * (t[i] - t[i - 1]) * 0.5 for i in range(1, len(t))))
     return {
         "status": "ok",
         "step_size": float(step),

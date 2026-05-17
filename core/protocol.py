@@ -8,6 +8,17 @@ FRAME_TELEMETRY = 0x01
 FRAME_PARAM_SET = 0x02
 FRAME_PARAM_REPORT = 0x03
 FRAME_EVENT = 0x05
+FRAME_HEARTBEAT = 0x06
+FRAME_MAP_STATUS = 0x08
+
+STATUS_MOTOR_ENABLE = 1 << 0
+STATUS_MOTOR_OUTPUT = 1 << 1
+STATUS_SPEED_PID = 1 << 2
+STATUS_TUNE = 1 << 3
+STATUS_OUTPUT_SAT = 1 << 4
+STATUS_PROTECT = 1 << 5
+STATUS_LOST = 1 << 6
+STATUS_MAP_PREDICTION = 1 << 7
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -39,6 +50,71 @@ def decode_telemetry(payload: bytes) -> dict:
     ]
     out = dict(zip(keys, vals))
     return out
+
+
+def decode_heartbeat(payload: bytes) -> dict:
+    fmt = "<IH"
+    if len(payload) != struct.calcsize(fmt):
+        raise ValueError("invalid heartbeat payload length")
+    uptime_ms, status_flags = struct.unpack(fmt, payload)
+    return {"uptime_ms": uptime_ms, "status_flags": status_flags}
+
+
+def decode_map_status(payload: bytes) -> dict:
+    fmt = "<IffHBHBfBH"
+    if len(payload) != struct.calcsize(fmt):
+        raise ValueError("invalid map status payload length")
+    vals = struct.unpack(fmt, payload)
+    keys = [
+        "uptime_ms", "distance_m", "yaw_deg", "current_id", "current_type",
+        "next_id", "next_type", "dist_to_next_m", "car_mode", "status_flags",
+    ]
+    return dict(zip(keys, vals))
+
+
+SEGMENT_NAMES = {
+    0: "UNKNOWN",
+    1: "STRAIGHT",
+    2: "CURVE_LEFT",
+    3: "CURVE_RIGHT",
+    4: "SHARP_LEFT",
+    5: "SHARP_RIGHT",
+    6: "S_CURVE",
+    7: "U_TURN",
+    8: "RISK",
+}
+
+CAR_MODE_NAMES = {
+    0: "IDLE",
+    1: "CALIBRATION",
+    2: "LEARNING",
+    3: "TRACKING",
+    4: "PREDICTION",
+    5: "HAIRPIN",
+    6: "LOST",
+    7: "PROTECT",
+}
+
+
+def describe_status_flags(flags: int) -> list[str]:
+    items = []
+    if flags & STATUS_MOTOR_ENABLE:
+        items.append("电机允许")
+    if flags & STATUS_MOTOR_OUTPUT:
+        items.append("电机输出")
+    if flags & STATUS_SPEED_PID:
+        items.append("速度闭环")
+    if flags & STATUS_TUNE:
+        items.append("调参")
+    if flags & STATUS_OUTPUT_SAT:
+        items.append("输出饱和")
+    if flags & STATUS_PROTECT:
+        items.append("保护")
+    if flags & STATUS_LOST:
+        items.append("丢线")
+    if flags & STATUS_MAP_PREDICTION:
+        items.append("地图预测")
+    return items or ["空闲"]
 
 
 def encode_param_set_payload(kp: float, ki: float, kd: float,
