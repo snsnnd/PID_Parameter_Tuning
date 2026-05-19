@@ -18,7 +18,8 @@ typedef enum {
     PID_FRAME_DEVICE_INFO  = 0x04,
     PID_FRAME_EVENT        = 0x05,
     PID_FRAME_HEARTBEAT    = 0x06,
-    PID_FRAME_ERROR        = 0x07
+    PID_FRAME_ERROR        = 0x07,
+    PID_FRAME_MAP_STATUS   = 0x08
 } pid_frame_type_t;
 
 typedef struct {
@@ -71,6 +72,13 @@ void pid_debug_init(const pid_debug_port_t *port);
 int pid_debug_send_telemetry(uint8_t device_id, uint8_t channel_id, const pid_debug_telemetry_t *tel);
 int pid_debug_send_param_report(uint8_t device_id, uint8_t channel_id, const pid_debug_param_t *param);
 int pid_debug_send_event(uint8_t device_id, uint8_t channel_id, uint16_t event_code, float value);
+int pid_debug_send_heartbeat(uint8_t device_id, uint16_t status_flags, uint32_t uptime_ms);
+int pid_debug_send_map_status(uint8_t device_id, uint32_t uptime_ms,
+                              float distance_m, float yaw_deg,
+                              uint16_t current_id, uint8_t current_type,
+                              uint16_t next_id, uint8_t next_type,
+                              float dist_to_next_m, uint8_t car_mode,
+                              uint16_t status_flags);
 void pid_debug_rx_byte(uint8_t byte);
 void pid_debug_poll(void);
 

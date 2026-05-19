@@ -1,0 +1,36 @@
+{
+  "device": {
+    "id": 2,
+    "name": "motor_speed",
+    "display_name": "单电机速度台架"
+  },
+  "transport": {
+    "default_baud": 115200,
+    "telemetry_period_ms": 50
+  },
+  "channels": [
+    {
+      "id": 0,
+      "name": "speed_pid",
+      "display_name": "速度PID",
+      "kind": "speed_pid",
+      "unit": "rpm",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    }
+  ],
+  "ground_params": [
+    {"name": "目标转速", "key": "target_rpm", "default": "500", "command": "TARGET {value}", "type": "float", "unit": "rpm", "description": "单电机目标转速"},
+    {"name": "速度PID", "key": "pid_speed", "default": "1.0 0.1 0.0", "command": "PID SPEED {value}", "type": "pid", "description": "速度 PID：kp ki kd"},
+    {"name": "遥测周期", "key": "scope_period", "default": "50", "command": "SCOPE PERIOD {value}", "type": "int", "unit": "ms", "description": "遥测周期"}
+  ],
+  "commands": [
+    {"name": "启动", "command": "START"},
+    {"name": "停止", "command": "STOP"}
+  ],
+  "status_flags": {
+    "0": "运行",
+    "1": "闭环",
+    "2": "输出饱和"
+  }
+}

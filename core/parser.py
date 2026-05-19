@@ -2,6 +2,8 @@ import struct
 from core.frame import PIDFrame
 from core.protocol import SOF, crc16_modbus
 
+MAX_PAYLOAD_LEN = 256
+
 
 class FrameParser:
     def __init__(self) -> None:
@@ -21,6 +23,9 @@ class FrameParser:
                 break
             version, ftype, dev, ch = self.buf[2], self.buf[3], self.buf[4], self.buf[5]
             plen = struct.unpack_from("<H", self.buf, 6)[0]
+            if plen > MAX_PAYLOAD_LEN:
+                del self.buf[0]
+                continue
             total = 10 + plen
             if len(self.buf) < total:
                 break
@@ -30,5 +35,7 @@ class FrameParser:
             calc_crc = crc16_modbus(frame[:-2])
             if rx_crc == calc_crc:
                 frames.append(PIDFrame(version, ftype, dev, ch, payload))
-            del self.buf[:total]
+                del self.buf[:total]
+            else:
+                del self.buf[0]
         return frames

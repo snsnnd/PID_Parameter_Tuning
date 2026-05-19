@@ -1,0 +1,38 @@
+{
+  "device": {
+    "id": 3,
+    "name": "gimbal_yaw",
+    "display_name": "云台Yaw轴"
+  },
+  "transport": {
+    "default_baud": 921600,
+    "telemetry_period_ms": 20
+  },
+  "channels": [
+    {
+      "id": 0,
+      "name": "yaw_pid",
+      "display_name": "Yaw角度PID",
+      "kind": "position_pid",
+      "unit": "deg",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    }
+  ],
+  "ground_params": [
+    {"name": "目标角度", "key": "target_yaw", "default": "0", "command": "YAW {value}", "type": "float", "unit": "deg", "description": "Yaw 目标角度"},
+    {"name": "Yaw PID", "key": "pid_yaw", "default": "8.0 0.0 0.2", "command": "PID YAW {value}", "type": "pid", "description": "Yaw PID：kp ki kd"},
+    {"name": "遥测周期", "key": "scope_period", "default": "20", "command": "SCOPE PERIOD {value}", "type": "int", "unit": "ms", "description": "遥测周期"}
+  ],
+  "commands": [
+    {"name": "使能", "command": "ENABLE 1"},
+    {"name": "失能", "command": "ENABLE 0"},
+    {"name": "回中", "command": "YAW 0"}
+  ],
+  "status_flags": {
+    "0": "使能",
+    "1": "闭环",
+    "2": "限位",
+    "3": "输出饱和"
+  }
+}

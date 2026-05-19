@@ -1,0 +1,95 @@
+{
+  "device": {
+    "id": 1,
+    "name": "smart_car",
+    "display_name": "智能车"
+  },
+  "transport": {
+    "default_baud": 9600,
+    "telemetry_period_ms": 150
+  },
+  "channels": [
+    {
+      "id": 0,
+      "name": "line_pid",
+      "display_name": "循迹PID",
+      "kind": "pid",
+      "unit": "error",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    },
+    {
+      "id": 1,
+      "name": "left_speed",
+      "display_name": "左轮速度PID",
+      "kind": "speed_pid",
+      "unit": "m/s",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    },
+    {
+      "id": 2,
+      "name": "right_speed",
+      "display_name": "右轮速度PID",
+      "kind": "speed_pid",
+      "unit": "m/s",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    },
+    {
+      "id": 254,
+      "name": "both_speed",
+      "display_name": "双轮速度PID",
+      "kind": "speed_pid_both",
+      "unit": "m/s",
+      "curves": ["target", "feedback", "error", "output"],
+      "supports_param_set": true
+    }
+  ],
+  "ground_params": [
+    {"name": "远控超时", "key": "timeout", "default": "1000", "command": "CFG TIMEOUT {value}", "type": "int", "unit": "ms", "category": "通信/遥测", "description": "远控超时时间，单位 ms，可运行期修改"},
+    {"name": "速度上限", "key": "speed_limit", "default": "0.225", "command": "CFG LIMIT {value}", "type": "float", "unit": "m/s", "category": "运动控制", "description": "运行期速度上限，单位 m/s；默认约等于商家 60RPM"},
+    {"name": "目标速度", "key": "target_speed", "default": "0.225", "command": "CFG SPEED {value}", "type": "float", "unit": "m/s", "category": "运动控制", "description": "运行期目标速度，单位 m/s；0.225m/s 约等于商家 60RPM"},
+    {"name": "运行模式", "key": "mode", "default": "TRACKING", "command": "MODE {value}", "type": "str", "category": "运动控制", "description": "覆盖小车运行模式"},
+    {"name": "远控电机门", "key": "motor", "default": "0", "command": "MOTOR {value}", "type": "bool", "category": "电机", "description": "远控电机允许位，0/1"},
+    {"name": "循迹PID", "key": "pid_line", "default": "60 0 0.25", "command": "PID LINE {value}", "type": "pid", "category": "控制算法", "description": "循迹 PID：由商家 600/0/50 和 Scale=0.1 折算；当前50ms周期D项含/dt"},
+    {"name": "左轮速度PID", "key": "pid_speed_left", "default": "300 50 0", "command": "PID LEFT {value}", "type": "pid", "category": "控制算法", "description": "左轮速度 PID：参考商家速度环 PI 300/50/0"},
+    {"name": "右轮速度PID", "key": "pid_speed_right", "default": "300 50 0", "command": "PID RIGHT {value}", "type": "pid", "category": "控制算法", "description": "右轮速度 PID：参考商家速度环 PI 300/50/0"},
+    {"name": "双轮速度PID", "key": "pid_speed_both", "default": "300 50 0", "command": "PID SPEED {value}", "type": "pid", "category": "控制算法", "description": "同时下发到左右轮速度 PID：参考商家速度环 PI 300/50/0"},
+    {"name": "左轮前馈模型", "key": "ff_left", "default": "0 10098", "command": "FF LEFT {value}", "type": "str", "category": "控制算法", "description": "左轮速度前馈：deadband_pwm pwm_per_mps；阶跃分析后可用模型建议自动下发"},
+    {"name": "右轮前馈模型", "key": "ff_right", "default": "0 10098", "command": "FF RIGHT {value}", "type": "str", "category": "控制算法", "description": "右轮速度前馈：deadband_pwm pwm_per_mps；左右轮应分别辨识"},
+    {"name": "双轮前馈模型", "key": "ff_both", "default": "0 10098", "command": "FF BOTH {value}", "type": "str", "category": "控制算法", "description": "同时下发左右轮速度前馈模型；仅在左右轮参数确认相近时使用"},
+    {"name": "遥测周期", "key": "scope_period", "default": "150", "command": "SCOPE PERIOD {value}", "type": "int", "unit": "ms", "category": "通信/遥测", "description": "PIDScope 遥测周期，单位 ms；高波特率可调低"},
+    {"name": "电机输出", "key": "motor_output", "default": "0", "command": "CFG SET MOTOR_OUTPUT {value}", "type": "bool", "category": "电机", "description": "安全开关：第一次点击预确认，第二次打开", "danger": true, "arm_command": "CFG ARM MOTOR_OUTPUT"},
+    {"name": "速度闭环", "key": "speed_pid", "default": "0", "command": "CFG SET SPEED_PID {value}", "type": "bool", "category": "控制算法", "description": "安全开关：第一次点击预确认，第二次打开", "danger": true, "arm_command": "CFG ARM SPEED_PID"},
+    {"name": "地图学习", "key": "track_map_learning", "default": "0", "command": "CFG SET TRACK_MAP_LEARNING {value}", "type": "bool", "category": "地图/策略", "description": "安全开关：第一次点击预确认，第二次打开", "danger": true, "arm_command": "CFG ARM TRACK_MAP_LEARNING"},
+    {"name": "PIDScope", "key": "pid_scope", "default": "0", "command": "CFG SET PID_SCOPE {value}", "type": "bool", "category": "通信/遥测", "description": "运行期开关"},
+    {"name": "PIDScope走蓝牙", "key": "pid_scope_hc05", "default": "0", "command": "CFG SET PID_SCOPE_OVER_HC05 {value}", "type": "bool", "category": "通信/遥测", "description": "运行期开关"},
+    {"name": "OLED显示", "key": "oled", "default": "1", "command": "CFG SET OLED {value}", "type": "bool", "category": "显示", "description": "运行期开关"},
+    {"name": "循迹传感器", "key": "line_sensor", "default": "1", "command": "CFG SET LINE_SENSOR {value}", "type": "bool", "category": "传感器", "description": "运行期开关"},
+    {"name": "IMU姿态", "key": "imu", "default": "0", "command": "CFG SET IMU {value}", "type": "bool", "category": "传感器", "description": "运行期开关，比赛默认关闭"},
+    {"name": "编码器", "key": "encoder", "default": "1", "command": "CFG SET ENCODER {value}", "type": "bool", "category": "传感器", "description": "运行期开关"},
+    {"name": "地图预测", "key": "map_prediction", "default": "0", "command": "CFG SET MAP_PREDICTION {value}", "type": "bool", "category": "地图/策略", "description": "运行期开关"},
+    {"name": "丢线保护", "key": "lost_protection", "default": "0", "command": "CFG SET LOST_PROTECTION {value}", "type": "bool", "category": "地图/策略", "description": "运行期开关"},
+    {"name": "蓝牙OLED测试", "key": "hc05_oled_test", "default": "0", "command": "CFG SET HC05_OLED_TEST {value}", "type": "bool", "category": "显示", "description": "运行期开关"},
+    {"name": "蓝牙回显测试", "key": "hc05_echo", "default": "0", "command": "CFG SET HC05_RX_ECHO_TEST {value}", "type": "bool", "category": "通信/遥测", "description": "运行期开关"},
+    {"name": "远程控制", "key": "remote_control", "default": "0", "command": "CFG SET REMOTE_CONTROL {value}", "type": "bool", "category": "通信/遥测", "description": "运行期开关，默认不接管下位机自主控制"},
+    {"name": "Flash存储", "key": "flash_storage", "default": "0", "command": "CFG SET FLASH_STORAGE {value}", "type": "bool", "category": "地图/策略", "description": "运行期开关；默认关闭，打开后才允许 SAVE/LOAD/ERASE"}
+  ],
+  "commands": [
+    {"name": "停车", "command": "STOP"},
+    {"name": "自动", "command": "AUTO"},
+    {"name": "连通测试", "command": "PING"},
+    {"name": "双轮速度波形", "command": "SCOPE SPEED"}
+  ],
+  "status_flags": {
+    "0": "电机允许",
+    "1": "电机输出",
+    "2": "速度闭环",
+    "3": "调参模式",
+    "4": "输出饱和",
+    "5": "保护",
+    "6": "丢线",
+    "7": "地图预测"
+  }
+}
