@@ -52,7 +52,7 @@
     {"name": "目标速度", "key": "target_speed", "default": "0.225", "command": "CFG SPEED {value}", "type": "float", "unit": "m/s", "category": "运动控制", "description": "运行期目标速度，单位 m/s；0.225m/s 约等于商家 60RPM"},
     {"name": "运行模式", "key": "mode", "default": "TRACKING", "command": "MODE {value}", "type": "str", "category": "运动控制", "description": "覆盖小车运行模式"},
     {"name": "远控电机门", "key": "motor", "default": "0", "command": "MOTOR {value}", "type": "bool", "category": "电机", "description": "远控电机允许位，0/1"},
-    {"name": "循迹PID", "key": "pid_line", "default": "60 0 0.25", "command": "PID LINE {value}", "type": "pid", "category": "控制算法", "description": "循迹 PID：由商家 600/0/50 和 Scale=0.1 折算；当前50ms周期D项含/dt"},
+    {"name": "循迹PID", "key": "pid_line", "default": "45 0 0.45", "command": "PID LINE {value}", "type": "pid", "category": "控制算法", "description": "循迹位置 PID：当前 20ms 周期，推荐 Ki=0，先调 Kp 再调 Kd"},
     {"name": "左轮速度PID", "key": "pid_speed_left", "default": "300 50 0", "command": "PID LEFT {value}", "type": "pid", "category": "控制算法", "description": "左轮速度 PID：参考商家速度环 PI 300/50/0"},
     {"name": "右轮速度PID", "key": "pid_speed_right", "default": "300 50 0", "command": "PID RIGHT {value}", "type": "pid", "category": "控制算法", "description": "右轮速度 PID：参考商家速度环 PI 300/50/0"},
     {"name": "双轮速度PID", "key": "pid_speed_both", "default": "300 50 0", "command": "PID SPEED {value}", "type": "pid", "category": "控制算法", "description": "同时下发到左右轮速度 PID：参考商家速度环 PI 300/50/0"},
@@ -90,6 +90,10 @@
     "4": "输出饱和",
     "5": "保护",
     "6": "丢线",
-    "7": "地图预测"
+    "7": "地图预测",
+    "8": "L2黑线",
+    "9": "L1黑线",
+    "10": "R1黑线",
+    "11": "R2黑线"
   }
 }

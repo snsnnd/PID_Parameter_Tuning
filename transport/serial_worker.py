@@ -21,11 +21,21 @@ class SerialWorker(QObject):
         self.parser = FrameParser()
         self.text_buffer = bytearray()
         self.write_queue: Queue[bytes] = Queue()
-        self.frame_queue: Queue[PIDFrame] = Queue(maxsize=10000)
+        self.frame_queue: Queue[PIDFrame] = Queue(maxsize=1000)
         self.dropped_frames = 0
-        self.debug_print = True
+        self.debug_print = False
         self._last_rx_host_s: dict[tuple[int, int], float] = {}
         self._last_rx_mcu_ms: dict[tuple[int, int], int] = {}
+
+    def _safe_close_serial(self) -> None:
+        ser = self.ser
+        self.ser = None
+        if not ser:
+            return
+        try:
+            ser.close()
+        except Exception as exc:
+            self.status.emit(f"串口关闭异常，已忽略：{exc}")
 
     def _print_frame_debug(self, frame: PIDFrame) -> None:
         if not self.debug_print:
@@ -71,7 +81,7 @@ class SerialWorker(QObject):
         except Full:
             self.dropped_frames += 1
 
-    def drain_frames(self, limit: int = 20000) -> list[PIDFrame]:
+    def drain_frames(self, limit: int = 1000) -> list[PIDFrame]:
         frames: list[PIDFrame] = []
         for _ in range(max(0, limit)):
             try:
@@ -150,9 +160,12 @@ class SerialWorker(QObject):
             self.ser = serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=0.2)
             self.running = True
             self.status.emit(f"已连接：{port}@{baud}")
-            while self.running and self.ser and self.ser.is_open:
+            while self.running:
+                ser = self.ser
+                if not ser or not ser.is_open:
+                    break
                 self._flush_writes()
-                data = self.ser.read(4096)
+                data = ser.read(4096)
                 if data:
                     self._feed_text_monitor(data)
                     frames = self.parser.feed(data)
@@ -161,8 +174,7 @@ class SerialWorker(QObject):
         except Exception as exc:
             self.status.emit(f"串口错误：{exc}")
         finally:
-            if self.ser:
-                self.ser.close()
+            self._safe_close_serial()
             self.status.emit("已断开")
 
     @Slot()
@@ -173,11 +185,7 @@ class SerialWorker(QObject):
                 self.ser.cancel_read()
         except Exception:
             pass
-        try:
-            if self.ser and self.ser.is_open:
-                self.ser.close()
-        except Exception:
-            pass
+        self._safe_close_serial()
 
     @Slot(bytes)
     def send_bytes(self, data: bytes) -> None:

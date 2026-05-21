@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QFormLayout, QDoubleSpinBox, QGroupBox, QTextEdit,
@@ -17,7 +17,7 @@ from transport.serial_worker import SerialWorker
 from core.frame import PIDFrame
 from core.protocol import (
     CAR_MODE_NAMES, FRAME_HEARTBEAT, FRAME_MAP_STATUS, FRAME_TELEMETRY, SEGMENT_NAMES,
-    decode_heartbeat, decode_map_status, decode_telemetry, describe_status_flags,
+    decode_heartbeat, decode_line_bin_from_flags, decode_map_status, decode_telemetry, describe_status_flags,
 )
 from core.device_manager import DeviceManager
 from core.command_router import CommandPlan, CommandRouter
@@ -96,6 +96,199 @@ class WaveWindow(QWidget):
         self.title.setText(title)
         for key, curve in self.curves.items():
             curve.setData(x, data[key])
+
+
+class LineTrackingScene(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.line_err = 0.0
+        self.steer = 0.0
+        self.kp = 0.0
+        self.kd = 0.0
+        self.flags = 0
+        self.segment_type = 0
+        self.car_mode = 0
+        self.line_bin: list[bool] | None = None
+        self.setMinimumHeight(260)
+
+    def update_state(self, line_err: float, steer: float, kp: float, kd: float, flags: int,
+                     segment_type: int | None = None, car_mode: int | None = None) -> None:
+        self.line_err = line_err
+        self.steer = steer
+        self.kp = kp
+        self.kd = kd
+        self.flags = flags
+        self.line_bin = decode_line_bin_from_flags(flags)
+        if segment_type is not None:
+            self.segment_type = segment_type
+        if car_mode is not None:
+            self.car_mode = car_mode
+        self.update()
+
+    def update_map_status(self, status: dict) -> None:
+        self.segment_type = int(status.get("current_type", self.segment_type))
+        self.car_mode = int(status.get("car_mode", self.car_mode))
+        self.flags = int(status.get("status_flags", self.flags))
+        self.line_bin = decode_line_bin_from_flags(self.flags)
+        self.update()
+
+    def _sensor_active(self) -> list[bool]:
+        if self.line_bin is not None:
+            return self.line_bin
+        if abs(self.line_err) >= 10.0 or (self.flags & 64):
+            return [False, False, False, False]
+        err = self.line_err
+        if err <= -2.5:
+            return [True, False, False, False]
+        if err <= -1.5:
+            return [True, True, False, False]
+        if err <= -0.5:
+            return [False, True, False, False]
+        if err < 0.5:
+            return [False, True, True, False]
+        if err < 1.5:
+            return [False, False, True, False]
+        if err < 2.5:
+            return [False, False, True, True]
+        return [False, False, False, True]
+
+    def _suggest_direction(self, active: list[bool]) -> str:
+        count = sum(1 for on in active if on)
+        l2, _l1, _r1, r2 = active
+        prefix = ""
+        if self.car_mode == 7:
+            prefix = "保护停车；"
+        elif self.car_mode == 6 or count == 0 or abs(self.line_err) >= 10.0 or (self.flags & 64):
+            return "建议动作：丢线搜索/停车，检查全白或传感器"
+
+        if count == 3 and l2 and not r2:
+            return f"建议动作：{prefix}三灯见线，按左急转/直角处理"
+        if count == 3 and r2 and not l2:
+            return f"建议动作：{prefix}三灯见线，按右急转/直角处理"
+        if self.segment_type == 4:
+            return f"建议动作：{prefix}左急转/直角处理"
+        if self.segment_type == 5:
+            return f"建议动作：{prefix}右急转/直角处理"
+        if self.segment_type == 8:
+            return f"建议动作：{prefix}风险/宽线，低速通过"
+
+        if self.steer > 5.0:
+            return f"建议动作：{prefix}向右修正（左轮更快）"
+        if self.steer < -5.0:
+            return f"建议动作：{prefix}向左修正（右轮更快）"
+        return f"建议动作：{prefix}基本直行"
+
+    def _draw_route(self, p: QPainter, center_x: float, top: int, bottom: int, line_x: float, lost: bool) -> None:
+        if lost:
+            p.setPen(QPen(QColor("#ef4444"), 3, Qt.DashLine))
+            p.drawLine(int(center_x), top, int(center_x), bottom)
+            return
+
+        seg = self.segment_type
+        p.setPen(QPen(QColor("#111827"), 12, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        path = QPainterPath()
+        path.moveTo(line_x, bottom)
+        span = min(150.0, self.width() * 0.26)
+        mid_y = (top + bottom) / 2.0
+        if seg in (2, 4):
+            strength = 0.95 if seg == 4 else 0.62
+            end_x = line_x - span * strength
+            path.cubicTo(line_x, mid_y, end_x, mid_y, end_x, top)
+        elif seg in (3, 5):
+            strength = 0.95 if seg == 5 else 0.62
+            end_x = line_x + span * strength
+            path.cubicTo(line_x, mid_y, end_x, mid_y, end_x, top)
+        elif seg == 6:
+            path.cubicTo(line_x + span * 0.75, bottom - (bottom - top) * 0.25,
+                         line_x - span * 0.75, top + (bottom - top) * 0.25,
+                         line_x, top)
+        elif seg == 7:
+            turn = -1.0 if line_x <= center_x else 1.0
+            path.cubicTo(line_x + turn * span, bottom - (bottom - top) * 0.20,
+                         line_x + turn * span, top + (bottom - top) * 0.35,
+                         line_x - turn * span * 0.40, top)
+        else:
+            path.lineTo(line_x, top)
+        p.drawPath(path)
+        if seg == 8:
+            p.setPen(QPen(QColor("#111827"), 8, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(int(line_x - span * 0.55), int(mid_y), int(line_x + span * 0.55), int(mid_y))
+
+    def paintEvent(self, event):
+        del event
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        h = self.height()
+        p.fillRect(self.rect(), QColor("#f7f9fb"))
+
+        title_font = QFont()
+        title_font.setPointSize(11)
+        title_font.setBold(True)
+        p.setFont(title_font)
+        p.setPen(QColor("#1f2937"))
+        p.drawText(12, 24, "循迹车视角：车身固定，黑线按相对位置显示")
+
+        lost = abs(self.line_err) >= 10.0 or (self.flags & 64)
+        center_x = w / 2.0
+        road_top = 42
+        road_bottom = h - 44
+        car_y = h - 96
+
+        line_x = center_x if lost else center_x + max(-1.0, min(1.0, self.line_err / 3.0)) * min(120.0, w * 0.28)
+        self._draw_route(p, center_x, road_top, road_bottom, line_x, lost)
+        if lost:
+            p.setPen(QColor("#ef4444"))
+            p.drawText(12, h - 18, "状态：丢线/无效误差，先降低速度并检查传感器/赛道")
+
+        p.setPen(QPen(QColor("#cbd5e1"), 1, Qt.DashLine))
+        p.drawLine(int(center_x), road_top, int(center_x), road_bottom)
+
+        car_w = min(150.0, w * 0.36)
+        car_h = 92.0
+        car_x = center_x - car_w / 2.0
+        p.setPen(QPen(QColor("#2563eb"), 2))
+        p.setBrush(QBrush(QColor("#dbeafe")))
+        p.drawRoundedRect(car_x, car_y, car_w, car_h, 14, 14)
+        p.setPen(QColor("#1d4ed8"))
+        p.drawText(int(car_x + car_w / 2 - 24), int(car_y + 18), "车头 ↑")
+
+        sensor_y = car_y + 62
+        sensor_offsets = [-0.36, -0.12, 0.12, 0.36]
+        sensor_names = ["L2", "L1", "R1", "R2"]
+        active = self._sensor_active()
+        for name, offset, on in zip(sensor_names, sensor_offsets, active):
+            sx = car_x + car_w * (0.5 + offset)
+            color = QColor("#111827") if on else QColor("#ffffff")
+            p.setBrush(QBrush(color))
+            p.setPen(QPen(QColor("#111827"), 2))
+            p.drawEllipse(sx - 10, sensor_y - 10, 20, 20)
+            p.setPen(QColor("#111827"))
+            p.drawText(int(sx - 10), int(sensor_y + 28), name)
+
+        if not lost:
+            p.setPen(QPen(QColor("#64748b"), 1, Qt.DashLine))
+            p.drawLine(int(line_x), int(road_top), int(line_x), int(sensor_y + 16))
+            p.setPen(QColor("#475569"))
+            p.drawText(int(line_x - 28), int(sensor_y + 45), "黑线")
+
+        p.setPen(QPen(QColor("#f97316"), 4, Qt.SolidLine, Qt.RoundCap))
+        if self.steer > 5.0:
+            p.drawLine(int(center_x), int(car_y + 40), int(center_x + 58), int(car_y + 18))
+        elif self.steer < -5.0:
+            p.drawLine(int(center_x), int(car_y + 40), int(center_x - 58), int(car_y + 18))
+        else:
+            p.drawLine(int(center_x), int(car_y + 40), int(center_x), int(car_y + 8))
+        direction = self._suggest_direction(active)
+
+        p.setPen(QColor("#334155"))
+        p.setFont(QFont())
+        side = "黑线在左，车身偏右" if self.line_err < -0.5 else ("黑线在右，车身偏左" if self.line_err > 0.5 else "黑线居中")
+        scene_name = SEGMENT_NAMES.get(self.segment_type, "UNKNOWN")
+        mode_name = CAR_MODE_NAMES.get(self.car_mode, "UNKNOWN")
+        p.drawText(12, 48, f"误差={self.line_err:.2f}，输出={self.steer:.1f}，{side}")
+        p.drawText(12, 68, direction)
+        p.drawText(12, 88, f"场景={scene_name}，模式={mode_name}，PID：Kp={self.kp:.3g}  Ki=0  Kd={self.kd:.3g}")
 
 
 class MapWindow(QWidget):
@@ -179,6 +372,7 @@ class MainWindow(QMainWindow):
             self.current_channel = next(iter(self.channel_defs.keys()))
         self.plots = {}
         self.curves_by_channel = {}
+        self.line_scene: LineTrackingScene | None = None
         self.pending_safety_feature = ""
         self._highlighted_row: tuple[QTableWidget, int] | None = None
         self._safety_confirm_timer = QTimer(self)
@@ -865,6 +1059,15 @@ class MainWindow(QMainWindow):
         self.curves_by_channel[key] = curves
         if "output" in curves:
             curves["output"].setVisible(False)
+        if key[1] == 0:
+            wrapper = QWidget()
+            layout = QVBoxLayout(wrapper)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+            self.line_scene = LineTrackingScene()
+            layout.addWidget(self.line_scene, 1)
+            layout.addWidget(plot, 2)
+            return wrapper
         return plot
 
     def set_curve_visible(self, curve_key: str, visible: bool):
@@ -1454,6 +1657,8 @@ class MainWindow(QMainWindow):
                 self.latest_status_flags = int(map_status.get("status_flags", self.latest_status_flags))
                 self.latest_map_status = map_status
                 self.status.setText(f"心跳 {self.latest_heartbeat_ms} ms | {self.scene_status_text()} | {self.control_status_text()}")
+                if self.line_scene:
+                    self.line_scene.update_map_status(map_status)
                 if self.map_win.isVisible():
                     self.map_win.update_map_status(map_status, self.control_status_text())
             except Exception:
@@ -1464,6 +1669,7 @@ class MainWindow(QMainWindow):
         try:
             tel = decode_telemetry(frame.payload)
             self.latest_status_flags = int(tel.get("status_flags", self.latest_status_flags))
+            self.annotate_telemetry_context(tel)
             self.dm.push_telemetry(frame.device_id, frame.channel_id, tel)
             if update_advanced:
                 self.advanced_win.update_from_telemetry(tel, frame.device_id, frame.channel_id)
@@ -1472,6 +1678,26 @@ class MainWindow(QMainWindow):
             return tel
         except Exception:
             return None
+
+    def annotate_telemetry_context(self, tel: dict) -> None:
+        flags = int(tel.get("status_flags", self.latest_status_flags))
+        line_bin = decode_line_bin_from_flags(flags)
+        if line_bin is not None:
+            tel["line_l2"] = 1 if line_bin[0] else 0
+            tel["line_l1"] = 1 if line_bin[1] else 0
+            tel["line_r1"] = 1 if line_bin[2] else 0
+            tel["line_r2"] = 1 if line_bin[3] else 0
+        else:
+            tel["line_l2"] = tel["line_l1"] = tel["line_r1"] = tel["line_r2"] = -1
+
+        status = self.latest_map_status or {}
+        tel["route_current_id"] = int(status.get("current_id", 0xFFFF))
+        tel["route_current_type"] = int(status.get("current_type", 0))
+        tel["route_next_id"] = int(status.get("next_id", 0xFFFF))
+        tel["route_next_type"] = int(status.get("next_type", 0))
+        tel["route_dist_to_next_m"] = float(status.get("dist_to_next_m", -1.0))
+        tel["route_car_mode"] = int(status.get("car_mode", 0))
+        tel["route_status_flags"] = int(status.get("status_flags", flags))
 
     def drain_serial_frames(self) -> int:
         frames = self.worker.drain_frames()
@@ -1518,9 +1744,24 @@ class MainWindow(QMainWindow):
             return
         last = {name: values[-1] for name, values in data.items()}
         self.sync_pid_from_channel(c, float(last["kp"]), float(last["ki"]), float(last["kd"]))
-        self.channel_io.setText(f"目标速度：{last['target']:.3f} m/s\n实际速度：{last['feedback']:.3f} m/s")
-        self.channel_error.setText(f"速度误差：{last['error']:.3f} m/s\n输出PWM：{last['output']:.1f}")
-        self.channel_gain.setText(f"Kp：{last['kp']:.3f}\nKi：{last['ki']:.3f}\nKd：{last['kd']:.3f}")
+        if c == 0:
+            if self.line_scene:
+                self.line_scene.update_state(
+                    float(last["error"]), float(last["output"]),
+                    float(last["kp"]), float(last["kd"]),
+                    int(last.get("status_flags", self.latest_status_flags)),
+                    int(self.latest_map_status.get("current_type", 0)) if self.latest_map_status else None,
+                    int(self.latest_map_status.get("car_mode", 0)) if self.latest_map_status else None,
+                )
+            side = "黑线在左，车身偏右" if last["error"] < -0.5 else ("黑线在右，车身偏左" if last["error"] > 0.5 else "黑线居中")
+            action = "向左修正" if last["output"] > 5.0 else ("向右修正" if last["output"] < -5.0 else "基本直行")
+            self.channel_io.setText(f"黑线位置：{side}\n传感器估计误差：{last['error']:.2f}")
+            self.channel_error.setText(f"转向输出：{last['output']:.1f}\n小车动作：{action}")
+            self.channel_gain.setText(f"Kp：{last['kp']:.3f}\nKi：{last['ki']:.3f}\nKd：{last['kd']:.3f}")
+        else:
+            self.channel_io.setText(f"目标速度：{last['target']:.3f} m/s\n实际速度：{last['feedback']:.3f} m/s")
+            self.channel_error.setText(f"速度误差：{last['error']:.3f} m/s\n输出PWM：{last['output']:.1f}")
+            self.channel_gain.setText(f"Kp：{last['kp']:.3f}\nKi：{last['ki']:.3f}\nKd：{last['kd']:.3f}")
         total_rows = len(self.dm.get_rows(d, c))
         self.channel_state.setText(
             f"窗口样本：{sample_count}\n累计样本：{total_rows}\n"
@@ -1685,6 +1926,8 @@ class MainWindow(QMainWindow):
         ))
 
     def pid_tuning_advice(self, window: list[dict], result: dict) -> list[str]:
+        if self.current_channel[1] == 0:
+            return self.line_pid_tuning_advice(window)
         if result.get("status") == "no_step":
             return ["PID建议：当前窗口没有检测到目标阶跃，不能计算超调或给调参建议；请先清空波形，再执行半自动阶跃采样。"]
         if result.get("status") != "ok" or not window:
@@ -1775,4 +2018,111 @@ class MainWindow(QMainWindow):
             *reasons,
             f"当前 PID：Kp={kp:.4g}, Ki={ki:.4g}, Kd={kd:.4g}",
             f"建议 PID：Kp={next_kp:.4g}, Ki={next_ki:.4g}, Kd={next_kd:.4g}",
+        ]
+
+    def line_pid_tuning_advice(self, window: list[dict]) -> list[str]:
+        if not window:
+            return ["位置PID建议：数据不足；请切到循迹PID通道采集一段真实循迹波形。"]
+
+        last = window[-1]
+        kp = float(last.get("kp", 0.0))
+        ki = float(last.get("ki", 0.0))
+        kd = float(last.get("kd", 0.0))
+        errors = [float(row.get("error", 0.0)) for row in window]
+        outputs = [float(row.get("output", 0.0)) for row in window]
+        p_terms = [float(row.get("p_term", 0.0)) for row in window]
+        d_terms = [float(row.get("d_term", 0.0)) for row in window]
+        flags = [int(row.get("status_flags", 0)) for row in window]
+
+        active = [i for i, (err, out) in enumerate(zip(errors, outputs)) if abs(err) > 1e-6 or abs(out) > 1e-6]
+        if not active:
+            return [
+                "位置PID建议：当前窗口几乎没有循迹动作，无法判断参数。",
+                f"当前 PID：Kp={kp:.4g}, Ki={ki:.4g}, Kd={kd:.4g}",
+                "建议：先让车在直线和轻弯上跑一段，再分析循迹PID通道。",
+            ]
+
+        valid = [i for i in active if abs(errors[i]) < 10.0]
+        lost = [i for i in active if abs(errors[i]) >= 10.0 or (flags[i] & 64)]
+        saturated = [i for i in active if abs(outputs[i]) >= 349.0]
+        valid_errors = [errors[i] for i in valid]
+        valid_outputs = [outputs[i] for i in valid]
+        valid_p = [p_terms[i] for i in valid]
+        valid_d = [d_terms[i] for i in valid]
+
+        def mean_abs(values: list[float]) -> float:
+            return sum(abs(v) for v in values) / len(values) if values else 0.0
+
+        def sign_flips(values: list[float], threshold: float) -> int:
+            signs: list[int] = []
+            for value in values:
+                if abs(value) < threshold:
+                    continue
+                sign = 1 if value > 0.0 else -1
+                if not signs or signs[-1] != sign:
+                    signs.append(sign)
+            return max(0, len(signs) - 1)
+
+        abs_error_mean = mean_abs(valid_errors)
+        abs_output_mean = mean_abs(valid_outputs)
+        d_to_p = mean_abs(valid_d) / max(mean_abs(valid_p), 1e-6)
+        err_flips = sign_flips(valid_errors, 0.5)
+        out_flips = sign_flips(valid_outputs, 5.0)
+        lost_ratio = len(lost) / max(1, len(active))
+        sat_ratio = len(saturated) / max(1, len(active))
+
+        next_kp, next_ki, next_kd = kp, 0.0, kd
+        stage = "保持"
+        reasons: list[str] = []
+
+        if ki != 0.0:
+            stage = "先清Ki"
+            reasons.append("位置环通常不用Ki；先只把Ki清零，避免过弯后残留积分偏置。")
+        elif kd <= 0.0:
+            stage = "先调Kp"
+            if lost_ratio > 0.10 or abs_error_mean > 1.0:
+                next_kp = max(kp * 1.20, 35.0)
+                reasons.append("当前没有D项，先按位置环基本流程提高Kp，让车能及时回线。")
+            elif err_flips >= 6 or sat_ratio > 0.20:
+                next_kp = kp * 0.90
+                reasons.append("当前没有D项但已经频繁换向/饱和，先降低Kp。")
+            else:
+                reasons.append("Kp阶段表现尚可；若直线仍摆，再进入Kd阶段，少量加入Kd。")
+        elif d_to_p > 2.0 or out_flips >= 8:
+            stage = "修正Kd"
+            next_kd = max(kd * 0.60, 0.08)
+            reasons.append("D项相对P项过强或输出频繁正负切换；本轮只降低Kd，不同时改Kp。")
+        elif lost_ratio > 0.15:
+            stage = "先调Kp"
+            next_kp = max(kp * 1.20, 45.0)
+            reasons.append("丢线/无效误差比例偏高，优先只提高Kp，让回线更早；Kd暂时不动。")
+        elif sat_ratio > 0.20:
+            stage = "先调Kp"
+            next_kp = kp * 0.90
+            reasons.append("输出饱和偏多，优先只降低Kp，避免打满后反向过冲。")
+        elif abs_error_mean > 1.2 and err_flips <= 4:
+            stage = "先调Kp"
+            next_kp = max(kp * 1.15, 40.0)
+            reasons.append("平均偏差偏大但左右摆动不严重，按顺序先只提高Kp。")
+        elif err_flips >= 6:
+            stage = "先调Kp"
+            next_kp = kp * 0.90
+            reasons.append("误差左右交替频繁，先只降低Kp；如果降Kp后仍摆，再单独调Kd。")
+        elif abs_error_mean < 0.8 and out_flips <= 4 and len(lost) == 0:
+            reasons.append("当前位置环表现较稳，可以保持参数；后续只在提高速度后再复查。")
+        else:
+            stage = "微调Kd"
+            next_kd = kd * 1.10
+            reasons.append("Kp基本可用但仍有轻微摆动，进入Kd阶段：小幅增加Kd抑制摆动。")
+
+        return [
+            "位置PID建议：按手调顺序给建议，每轮尽量只改一个主参数。",
+            f"调参阶段：{stage}",
+            *reasons,
+            f"诊断：有效样本={len(active)}，丢线/无效={len(lost)}，输出饱和={len(saturated)}，误差换向={err_flips}，输出换向={out_flips}。",
+            f"诊断：平均|误差|≈{abs_error_mean:.2f}，平均|输出|≈{abs_output_mean:.1f}，平均|D|/|P|≈{d_to_p:.2f}。",
+            f"当前 PID：Kp={kp:.4g}, Ki={ki:.4g}, Kd={kd:.4g}",
+            f"建议 PID：Kp={next_kp:.4g}, Ki={next_ki:.4g}, Kd={next_kd:.4g}",
+            f"可下发命令：PID LINE {next_kp:.4g} {next_ki:.4g} {next_kd:.4g}",
+            "确认效果后保存：CFG SET FLASH_STORAGE 1，然后 SAVE PID。",
         ]

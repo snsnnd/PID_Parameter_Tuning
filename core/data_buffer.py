@@ -9,6 +9,9 @@ FIELDS = (
     "timestamp_ms", "target", "feedback", "error", "output",
     "kp", "ki", "kd", "p_term", "i_term", "d_term",
     "extra1", "extra2", "status_flags",
+    "line_l2", "line_l1", "line_r1", "line_r2",
+    "route_current_id", "route_current_type", "route_next_id", "route_next_type",
+    "route_dist_to_next_m", "route_car_mode", "route_status_flags",
 )
 
 

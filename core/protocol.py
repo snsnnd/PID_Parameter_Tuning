@@ -19,6 +19,12 @@ STATUS_OUTPUT_SAT = 1 << 4
 STATUS_PROTECT = 1 << 5
 STATUS_LOST = 1 << 6
 STATUS_MAP_PREDICTION = 1 << 7
+STATUS_LINE_L2 = 1 << 8
+STATUS_LINE_L1 = 1 << 9
+STATUS_LINE_R1 = 1 << 10
+STATUS_LINE_R2 = 1 << 11
+STATUS_LINE_VALID = 1 << 12
+STATUS_LINE_MASK = STATUS_LINE_L2 | STATUS_LINE_L1 | STATUS_LINE_R1 | STATUS_LINE_R2
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -58,6 +64,17 @@ def decode_heartbeat(payload: bytes) -> dict:
         raise ValueError("invalid heartbeat payload length")
     uptime_ms, status_flags = struct.unpack(fmt, payload)
     return {"uptime_ms": uptime_ms, "status_flags": status_flags}
+
+
+def decode_line_bin_from_flags(flags: int) -> list[bool] | None:
+    if (flags & STATUS_LINE_VALID) == 0:
+        return None
+    return [
+        bool(flags & STATUS_LINE_L2),
+        bool(flags & STATUS_LINE_L1),
+        bool(flags & STATUS_LINE_R1),
+        bool(flags & STATUS_LINE_R2),
+    ]
 
 
 def decode_map_status(payload: bytes) -> dict:
@@ -114,6 +131,10 @@ def describe_status_flags(flags: int) -> list[str]:
         items.append("丢线")
     if flags & STATUS_MAP_PREDICTION:
         items.append("地图预测")
+    line_bin = decode_line_bin_from_flags(flags)
+    if line_bin is not None:
+        names = [name for name, active in zip(["L2", "L1", "R1", "R2"], line_bin) if active]
+        items.append("循迹:" + ("/".join(names) if names else "全白"))
     return items or ["空闲"]
 
 
